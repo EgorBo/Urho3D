@@ -137,24 +137,9 @@ if (CMAKE_PROJECT_NAME STREQUAL Urho3D)
     # On Windows platform Direct3D11 can be optionally chosen
     # Using Direct3D11 on non-MSVC compiler may require copying and renaming Microsoft official libraries (.lib to .a), else link failures or non-functioning graphics may result
     cmake_dependent_option (URHO3D_D3D11 "Use Direct3D11 instead of Direct3D9 (Windows platform only); overrides URHO3D_OPENGL option" FALSE "WIN32" FALSE)
-    if (NOT ARM AND URHO3D_64BIT)
-        # It is not possible to turn it off on 64-bit MSVC and it appears it is also not able to do so safely on 64-bit GCC
-        set (URHO3D_SSE TRUE)       # Set it as a normal CMake variable (not an on/off option)
-    else ()
-        # Set the default to true for all the platforms that support SSE extension except specificially stated otherwise below
-        if (HAVE_SSE OR HAVE_SSE2)
-            set (URHO3D_DEFAULT_SSE TRUE)
-            if (MINGW)
-                # Certain MinGW versions fail to compile SSE code. This is the initial guess for known "bad" version range, and can be tightened later
-                if (COMPILER_VERSION VERSION_LESS 4.9.1)
-                    message (WARNING "Disabling SSE by default due to MinGW version. It is recommended to upgrade to MinGW with GCC >= 4.9.1. You can also try to re-enable SSE with CMake option -DURHO3D_SSE=1, but this may result in compile errors.")
-                    set (URHO3D_DEFAULT_SSE FALSE)
-                endif ()
-            endif ()
-        else ()
-            set (URHO3D_DEFAULT_SSE FALSE)
-        endif ()
-        cmake_dependent_option (URHO3D_SSE "Enable SSE/SSE2 instruction set (32-bit Web and Intel platforms only, including Android on Intel Atom); default to true on Intel and false on Web platform; the effective SSE level could be higher, see also URHO3D_DEPLOYMENT_TARGET and CMAKE_OSX_DEPLOYMENT_TARGET build options" ${URHO3D_DEFAULT_SSE} "NOT ARM" FALSE)
+    if (NOT ARM)
+        # It is not possible to turn SSE off on 64-bit MSVC and it appears it is also not able to do so safely on 64-bit GCC
+        cmake_dependent_option (URHO3D_SSE "Enable SSE/SSE2 instruction set (32-bit Web and Intel platforms only, including Android on Intel Atom); default to true on Intel and false on Web platform; the effective SSE level could be higher, see also URHO3D_DEPLOYMENT_TARGET and CMAKE_OSX_DEPLOYMENT_TARGET build options" ${HAVE_SSE2} "NOT URHO3D_64BIT" TRUE)
     endif ()
     cmake_dependent_option (URHO3D_3DNOW "Enable 3DNow! instruction set (Linux platform only); should only be used for older CPU with (legacy) 3DNow! support" ${HAVE_3DNOW} "NOT WIN32 AND NOT APPLE AND NOT WEB AND NOT ARM AND NOT URHO3D_SSE" FALSE)
     cmake_dependent_option (URHO3D_MMX "Enable MMX instruction set (32-bit Linux platform only); the MMX is effectively enabled when 3DNow! or SSE is enabled; should only be used for older CPU with MMX support" ${HAVE_MMX} "NOT WIN32 AND NOT APPLE AND NOT WEB AND NOT ARM AND NOT URHO3D_64BIT AND NOT URHO3D_SSE AND NOT URHO3D_3DNOW" FALSE)
@@ -203,8 +188,10 @@ else ()
     if (URHO3D_PCH OR URHO3D_UPDATE_SOURCE_TREE OR URHO3D_TOOLS)
         # Just reference it to suppress "unused variable" CMake warning on downstream projects using this CMake module
     endif ()
-    # All Urho3D downstream projects require Urho3D library, so find Urho3D library here now
-    if (NOT CMAKE_PROJECT_NAME MATCHES ^Urho3D-ExternalProject-)
+    if (CMAKE_PROJECT_NAME MATCHES ^Urho3D-ExternalProject-)
+        set (URHO3D_SSE ${HAVE_SSE2})
+    else ()
+        # All Urho3D downstream projects require Urho3D library, so find Urho3D library here now
         find_package (Urho3D REQUIRED)
         include_directories (${URHO3D_INCLUDE_DIRS})
     endif ()
@@ -347,8 +334,8 @@ if ($ENV{COVERITY_SCAN_BRANCH})
 endif ()
 
 # Enable/disable SIMD instruction set for STB image (do it here instead of in the STB CMakeLists.txt because the header files are exposed to Urho3D library user)
-if (NEON)
-    add_definitions (-DSTBI_NEON)
+if (NEON AND NOT XCODE)
+    add_definitions (-DSTBI_NEON)       # Cannot define it directory for Xcode due to universal binary support, we define it in the setup_target() macro instead for Xcode
 elseif (NOT URHO3D_SSE)
     add_definitions (-DSTBI_NO_SIMD)    # GCC/Clang/MinGW will switch this off automatically except MSVC, but no harm to make it explicit for all
 endif ()
@@ -1022,9 +1009,9 @@ macro (setup_target)
         endif ()
         if (URHO3D_SSE OR NEON)
             # When targeting x86 with SSE enabled; or when targeting iOS with NEON enabled as universal binary includes iPhoneSimulator x86 arch too
-            # This is kind of redundant because Clang by default always enable SSE support for both i386 and x86_64 ABIs, still just to be sure
-            list (APPEND TARGET_PROPERTIES XCODE_ATTRIBUTE_OTHER_CFLAGS[arch=i386] "-msse -msse2 $(OTHER_CFLAGS)")
-            list (APPEND TARGET_PROPERTIES XCODE_ATTRIBUTE_OTHER_CPLUSPLUSFLAGS[arch=i386] "-msse -msse2 $(OTHER_CPLUSPLUSFLAGS)")
+            # Clang by default always enable SSE instruction set for both i386 and x86_64 ABIs, so we only need to take care of special compiler flags/defines for NEON
+            list (APPEND TARGET_PROPERTIES XCODE_ATTRIBUTE_OTHER_CFLAGS[sdk=iphoneos*] "-DSTBI_NEON $(OTHER_CFLAGS)")
+            list (APPEND TARGET_PROPERTIES XCODE_ATTRIBUTE_OTHER_CPLUSPLUSFLAGS[sdk=iphoneos*] "-DSTBI_NEON $(OTHER_CPLUSPLUSFLAGS)")
         else ()
             # Nullify the Clang default so that it is consistent with GCC
             list (APPEND TARGET_PROPERTIES XCODE_ATTRIBUTE_OTHER_CFLAGS[arch=i386] "-mno-sse $(OTHER_CFLAGS)")
